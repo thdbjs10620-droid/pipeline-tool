@@ -490,6 +490,7 @@ textarea.g-input { resize: vertical; line-height: 1.65; }
       <span id="saStatus" style="display:none">vertex-ai-service-agent</span>
       <input type="hidden" id="anthropicKeyInput" value="">
       <input type="hidden" id="openaiKeyInput" value="">
+      <input type="hidden" id="geminiKeyInput" value="">
       <span class="tag" id="apiKeyToggleBtn" onclick="toggleApiKeyPanel()" style="background:rgba(100,80,140,0.12);color:#6A5A8A;cursor:pointer">&#9881; API Keys</span>
     </div>
   </div>
@@ -510,6 +511,10 @@ textarea.g-input { resize: vertical; line-height: 1.65; }
       <div style="display:flex;align-items:center;gap:10px">
         <label style="font-size:12px;font-weight:600;color:#6A5A8A;min-width:100px">Azure OpenAI</label>
         <input type="password" id="openaiKeyVisible" placeholder="API key..." oninput="saveApiKey('openai', this.value)" style="flex:1;padding:6px 10px;font-size:12px;border-radius:8px;border:1px solid rgba(120,100,160,0.2);background:rgba(255,255,255,0.8);color:#2C2838;font-family:monospace">
+      </div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <label style="font-size:12px;font-weight:600;color:#6A5A8A;min-width:100px">Google AI</label>
+        <input type="password" id="geminiKeyVisible" placeholder="AIzaSy..." oninput="saveApiKey('gemini', this.value)" style="flex:1;padding:6px 10px;font-size:12px;border-radius:8px;border:1px solid rgba(120,100,160,0.2);background:rgba(255,255,255,0.8);color:#2C2838;font-family:monospace">
       </div>
     </div>
     <div style="margin-top:8px;font-size:11px;color:#8A7A9A">Keys are saved to localStorage (browser only, not transmitted anywhere).</div>
@@ -1787,12 +1792,19 @@ const OPENAI_MODELS = [
   'gpt-4o'
 ];
 
+const GEMINI_MODELS = [
+  'gemini-2.5-pro',
+  'gemini-2.5-flash',
+  'gemini-2.5-flash-lite',
+  'gemini-3-flash-preview'
+];
+
 function populateModels(containerId, radioName, multiSelect = false) {
   const container = document.getElementById(containerId);
   const serverModels = state.models
     .map(m => typeof m === 'string' ? m : m.name || m.model_name || m.id)
     .filter(name => !name.startsWith('claude-'));
-  const allModels = [...serverModels, ...CLAUDE_MODELS, ...OPENAI_MODELS];
+  const allModels = [...serverModels, ...CLAUDE_MODELS, ...OPENAI_MODELS, ...GEMINI_MODELS];
   if (!allModels.length) {
     container.innerHTML = '<span class="text-sm text-muted">Failed to load models</span>';
     return;
@@ -2519,30 +2531,41 @@ function saveApiKey(provider, value) {
   } else if (provider === 'openai') {
     document.getElementById('openaiKeyInput').value = value;
     localStorage.setItem('apiKey_openai', value);
+  } else if (provider === 'gemini') {
+    document.getElementById('geminiKeyInput').value = value;
+    localStorage.setItem('apiKey_gemini', value);
   }
   updateApiKeyStatus();
 }
 
 function loadApiKeys() {
-  const anthropicKey = localStorage.getItem('apiKey_anthropic') || '';
-  const openaiKey = localStorage.getItem('apiKey_openai') || '';
+  const hardcodedAnthropic = document.getElementById('anthropicKeyInput').value.trim();
+  const hardcodedOpenai = document.getElementById('openaiKeyInput').value.trim();
+  const hardcodedGemini = document.getElementById('geminiKeyInput').value.trim();
+  const anthropicKey = localStorage.getItem('apiKey_anthropic') || hardcodedAnthropic || '';
+  const openaiKey = localStorage.getItem('apiKey_openai') || hardcodedOpenai || '';
+  const geminiKey = localStorage.getItem('apiKey_gemini') || hardcodedGemini || '';
   document.getElementById('anthropicKeyInput').value = anthropicKey;
   document.getElementById('openaiKeyInput').value = openaiKey;
+  document.getElementById('geminiKeyInput').value = geminiKey;
   document.getElementById('anthropicKeyVisible').value = anthropicKey;
   document.getElementById('openaiKeyVisible').value = openaiKey;
+  document.getElementById('geminiKeyVisible').value = geminiKey;
   updateApiKeyStatus();
 }
 
 function updateApiKeyStatus() {
   const hasAnthropic = !!document.getElementById('anthropicKeyInput').value.trim();
   const hasOpenai = !!document.getElementById('openaiKeyInput').value.trim();
+  const hasGemini = !!document.getElementById('geminiKeyInput').value.trim();
   const hasVertex = !!state.serviceAccount;
-  const count = (hasAnthropic ? 1 : 0) + (hasOpenai ? 1 : 0) + (hasVertex ? 1 : 0);
+  const count = (hasAnthropic ? 1 : 0) + (hasOpenai ? 1 : 0) + (hasGemini ? 1 : 0) + (hasVertex ? 1 : 0);
+  const total = 4;
   const btn = document.getElementById('apiKeyToggleBtn');
   if (count > 0) {
     btn.style.background = 'rgba(80,160,100,0.12)';
     btn.style.color = '#4A8A5A';
-    btn.innerHTML = '&#9679; Keys (' + count + '/3)';
+    btn.innerHTML = '&#9679; Keys (' + count + '/' + total + ')';
   } else {
     btn.style.background = 'rgba(200,80,80,0.12)';
     btn.style.color = '#AA5A5A';
@@ -2617,11 +2640,17 @@ function isOpenAIModel(model) {
   return OPENAI_MODELS.includes(model);
 }
 
+function isGeminiModel(model) {
+  return GEMINI_MODELS.includes(model) || model.startsWith('gemini-');
+}
+
 async function callLLM(model, systemInstruction, contents, generationConfig, progressFn, thinkingConfig = null) {
   if (isClaudeModel(model)) {
     return callAnthropicAPI(model, systemInstruction, contents, generationConfig, progressFn, thinkingConfig);
   } else if (isOpenAIModel(model)) {
     return callOpenAIAPI(model, systemInstruction, contents, generationConfig, progressFn, thinkingConfig);
+  } else if (isGeminiModel(model) && !state.serviceAccount) {
+    return callGeminiAPI(model, systemInstruction, contents, generationConfig, progressFn, thinkingConfig);
   } else {
     return callVertexAPI(model, systemInstruction, contents, generationConfig, progressFn, thinkingConfig);
   }
@@ -2631,6 +2660,8 @@ async function callLLM(model, systemInstruction, contents, generationConfig, pro
 async function callLLMForBench(model, systemInstruction, contents, generationConfig, thinkingConfig = null) {
   if (isClaudeModel(model)) {
     return callAnthropicStreamBench(model, systemInstruction, contents, generationConfig, thinkingConfig);
+  } else if (isGeminiModel(model) && !state.serviceAccount) {
+    return callGeminiStreamBench(model, systemInstruction, contents, generationConfig, thinkingConfig);
   } else {
     return callVertexStreamBench(model, systemInstruction, contents, generationConfig, thinkingConfig);
   }
@@ -2684,6 +2715,166 @@ async function callVertexStreamBench(model, systemInstruction, contents, generat
   if (!res.ok) {
     const errText = await res.text();
     throw new Error(`Vertex AI ${res.status}: ${errText}`);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let usageData = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop();
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      const jsonStr = line.slice(6).trim();
+      if (!jsonStr || jsonStr === '[DONE]') continue;
+      try {
+        const chunk = JSON.parse(jsonStr);
+        const parts = chunk.candidates?.[0]?.content?.parts || [];
+        for (const part of parts) {
+          if (part.thought === true) {
+            thinkingText = (thinkingText || '') + part.text;
+          } else if (part.text) {
+            if (ttft === null) ttft = Date.now() - t0;
+            text += part.text;
+          }
+        }
+        if (chunk.usageMetadata) usageData = chunk.usageMetadata;
+      } catch (e) {}
+    }
+  }
+
+  const usage = usageData ? {
+    inputTokens: usageData.promptTokenCount || 0,
+    outputTokens: usageData.candidatesTokenCount || 0,
+    thinkingTokens: usageData.thoughtsTokenCount || usageData.thinkingTokenCount || 0,
+    totalTokens: usageData.totalTokenCount || 0
+  } : null;
+
+  return { text, thinking: thinkingText, usage, ttft };
+}
+
+// ========== Google AI (Gemini API Key) ==========
+async function callGeminiAPI(model, systemInstruction, contents, generationConfig, progressFn, thinkingConfig = null) {
+  const apiKey = document.getElementById('geminiKeyInput').value.trim();
+  if (!apiKey) throw new Error('Please enter Google AI API key.');
+  progressFn(10, 'Calling Gemini API...');
+
+  const is25Model = model.includes('2.5');
+  const thinkingOn = thinkingConfig && thinkingConfig.enabled;
+  const apiVersion = (thinkingOn || is25Model) ? 'v1beta' : 'v1';
+  const geminiUrl = `https://generativelanguage.googleapis.com/${apiVersion}/models/${model}:generateContent?key=${apiKey}`;
+
+  const requestBody = {
+    system_instruction: { parts: [{ text: systemInstruction }] },
+    contents,
+    generationConfig
+  };
+
+  if (thinkingOn) {
+    const tCfg = { includeThoughts: true };
+    tCfg.thinkingBudget = thinkingConfig.budgetTokens === -1 ? -1 : (thinkingConfig.budgetTokens || 10240);
+    requestBody.generationConfig.thinkingConfig = tCfg;
+  }
+
+  progressFn(30, 'Waiting for response...');
+  const MAX_RETRIES = 10;
+  let res;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    res = await fetch(geminiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestBody)
+    });
+    if (res.status === 429 && attempt < MAX_RETRIES) {
+      const delay = Math.min(2000 * Math.pow(2, attempt), 60000) + Math.random() * 2000;
+      progressFn(30 + attempt * 5, `Rate limited, retrying in ${Math.round(delay / 1000)}s...`);
+      await new Promise(r => setTimeout(r, delay));
+      continue;
+    }
+    break;
+  }
+
+  progressFn(80, 'Processing response...');
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Gemini API ${res.status}: ${errText}`);
+  }
+  const data = await res.json();
+  progressFn(100, 'Done');
+
+  let thinkingText = null;
+  let text = '';
+  const parts = data.candidates?.[0]?.content?.parts || [];
+  for (const part of parts) {
+    if (part.thought === true) {
+      thinkingText = (thinkingText || '') + part.text;
+    } else if (part.text) {
+      text += part.text;
+    }
+  }
+  if (!text) text = JSON.stringify(data, null, 2);
+  const usage = data.usageMetadata ? {
+    inputTokens: data.usageMetadata.promptTokenCount || 0,
+    outputTokens: data.usageMetadata.candidatesTokenCount || 0,
+    thinkingTokens: data.usageMetadata.thoughtsTokenCount || data.usageMetadata.thinkingTokenCount || 0,
+    totalTokens: data.usageMetadata.totalTokenCount || 0
+  } : null;
+  return { text, thinking: thinkingText, raw: data, usage };
+}
+
+async function callGeminiStreamBench(model, systemInstruction, contents, generationConfig, thinkingConfig) {
+  const apiKey = document.getElementById('geminiKeyInput').value.trim();
+  if (!apiKey) throw new Error('Please enter Google AI API key.');
+
+  const is25Model = model.includes('2.5');
+  const thinkingOn = thinkingConfig && thinkingConfig.enabled;
+  const apiVersion = (thinkingOn || is25Model) ? 'v1beta' : 'v1';
+  const geminiUrl = `https://generativelanguage.googleapis.com/${apiVersion}/models/${model}:streamGenerateContent?alt=sse&key=${apiKey}`;
+
+  const requestBody = {
+    system_instruction: { parts: [{ text: systemInstruction }] },
+    contents,
+    generationConfig
+  };
+
+  if (thinkingOn) {
+    const tCfg = { includeThoughts: true };
+    tCfg.thinkingBudget = thinkingConfig.budgetTokens === -1 ? -1 : (thinkingConfig.budgetTokens || 10240);
+    requestBody.generationConfig.thinkingConfig = tCfg;
+  } else if (is25Model) {
+    requestBody.generationConfig.thinkingConfig = {
+      thinkingBudget: model.includes('pro') ? 128 : 0
+    };
+  }
+
+  const t0 = Date.now();
+  let ttft = null;
+  let text = '', thinkingText = null;
+
+  const MAX_RETRIES = 10;
+  let res;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    res = await fetch(geminiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestBody)
+    });
+    if (res.status === 429 && attempt < MAX_RETRIES) {
+      const delay = Math.min(2000 * Math.pow(2, attempt), 60000) + Math.random() * 2000;
+      await new Promise(r => setTimeout(r, delay));
+      continue;
+    }
+    break;
+  }
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Gemini API ${res.status}: ${errText}`);
   }
 
   const reader = res.body.getReader();
@@ -3349,6 +3540,7 @@ const PRICING = {
   'gemini-2.5-flash-lite':{ input: 0.10,  output: 0.40 },
   'gemini-2.0-flash':     { input: 0.15,  output: 0.60 },
   'gemini-2.0-flash-lite':{ input: 0.075, output: 0.30 },
+  'gemini-3-flash-preview':{ input: 0.50,  output: 3.00 },
   'claude-opus-4-6':              { input: 5.00, output: 25.00 },
   'claude-sonnet-4-6':            { input: 3.00, output: 15.00 },
   'claude-sonnet-4-5-20250929':   { input: 3.00, output: 15.00 },
