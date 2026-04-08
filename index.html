@@ -3320,31 +3320,62 @@ function resolveTemplateVars(prompt, session) {
     ? JSON.parse(session.creator_material) : (session.creator_material || {});
   const um = typeof session.user_material === 'string'
     ? JSON.parse(session.user_material) : (session.user_material || {});
+  const add = cm.additional || {};
+
+  console.log('[resolveTemplateVars] um:', JSON.stringify(um));
+  console.log('[resolveTemplateVars] cm keys:', Object.keys(cm));
+  console.log('[resolveTemplateVars] cm.additional keys:', Object.keys(add));
+
+  const userName = um.name || '';
 
   const vars = {
-    'material.user.name': um.name || '',
-    'userMaterial.name': um.name || '',
+    // user / protagonist
+    'material.user.name': userName,
+    'userMaterial.name': userName,
     'material.user.description': um.description || '',
     'userMaterial.description': um.description || '',
+    // plot / creator
     'material.plot.title': cm.title || '',
     'creatorMaterial.title': cm.title || '',
     'material.plot.shortDescription': cm.short_description || cm.shortDescription || '',
     'creatorMaterial.shortDescription': cm.short_description || cm.shortDescription || '',
     'material.plot.longDescription': cm.long_description || cm.longDescription || '',
     'creatorMaterial.longDescription': cm.long_description || cm.longDescription || '',
-    'material.plot.genre': cm.genre || (cm.additional?.genre) || '',
-    'creatorMaterial.additional.genre': cm.genre || (cm.additional?.genre) || '',
-    'material.plot.scenario': cm.scenario || (cm.additional?.scenario) || '',
-    'creatorMaterial.additional.scenario': cm.scenario || (cm.additional?.scenario) || '',
-    'material.length.min': cm.additional?.length?.min || cm.length?.min || '400',
-    'material.length.max': cm.additional?.length?.max || cm.length?.max || '800',
+    'material.plot.genre': cm.genre || add.genre || '',
+    'creatorMaterial.additional.genre': cm.genre || add.genre || '',
+    'material.plot.scenario': cm.scenario || add.scenario || '',
+    'creatorMaterial.additional.scenario': cm.scenario || add.scenario || '',
+    // length
+    'material.length.min': String(add.length?.min || cm.length?.min || add.responseLength?.min || '400'),
+    'material.length.max': String(add.length?.max || cm.length?.max || add.responseLength?.max || '800'),
+    // isUnlimited
+    'material.isUnlimited': String(add.isUnlimited || cm.isUnlimited || false),
   };
 
   let result = prompt;
+
+  // 1) Jinja 스타일: {{ key }}, {{ key | raw }} 등
   for (const [key, value] of Object.entries(vars)) {
-    const pattern = new RegExp(`\\{\\{\\s*${key.replace(/\./g, '\\.')}(\\s*\\|\\s*raw)?\\s*\\}\\}`, 'g');
+    const pattern = new RegExp(`\\{\\{\\s*${key.replace(/\./g, '\\.')}(\\s*\\|\\s*\\w+)*\\s*\\}\\}`, 'g');
     result = result.replace(pattern, value);
   }
+
+  // 2) {{user}} 플레이스홀더 (RP 플랫폼 공통)
+  if (userName) {
+    result = result.replace(/\{\{\s*user\s*\}\}/gi, userName);
+  }
+
+  // 3) Jinja 조건문 간이 처리: {% if material.isUnlimited %} ... {% else %} ... {% endif %}
+  result = result.replace(/\{%\s*if\s+material\.isUnlimited\s*%\}([\s\S]*?)\{%\s*else\s*%\}([\s\S]*?)\{%\s*endif\s*%\}/g,
+    (_, ifBlock, elseBlock) => {
+      const isUnlimited = add.isUnlimited || cm.isUnlimited || false;
+      return isUnlimited ? ifBlock : elseBlock;
+    }
+  );
+
+  // 4) 남은 단순 {% if ... %} ... {% endif %} (else 없는) — 조건 평가 불가하므로 내용 유지
+  // 5) 남은 {% for %} 등 Jinja 블록 태그 — 그대로 유지 (서버 렌더링 영역)
+
   return result;
 }
 
