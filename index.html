@@ -548,7 +548,7 @@ textarea.g-input { resize: vertical; line-height: 1.65; }
              ondrop="handleFileDrop(event)"
              onclick="document.getElementById('fileInput').click()">
           Drop JSON file here or click to upload
-          <input type="file" id="fileInput" accept=".json" style="display:none" onchange="handleFileSelect(event)">
+          <input type="file" id="fileInput" accept=".json,.jsonl" style="display:none" onchange="handleFileSelect(event)">
         </div>
         <div class="mt-8" style="text-align:center;color:#B0A8B8;font-size:16px">or</div>
         <div class="mt-8">
@@ -558,6 +558,21 @@ textarea.g-input { resize: vertical; line-height: 1.65; }
         <button type="button" class="g-btn mt-8" onclick="loadSessionFromJson()" style="background:linear-gradient(135deg,#6A80BB,#5A70AA);color:white;padding:10px 22px;border-radius:12px;font-weight:600;font-size:16px;box-shadow:0 3px 12px rgba(90,112,170,0.25)">Import JSON</button>
       </div>
       <div id="loaderStatus"></div>
+      <div id="multiSessionNav" style="display:none;margin-top:12px;padding:12px 16px;border-radius:12px;background:rgba(184,134,11,0.06);border:1px solid rgba(184,134,11,0.15)">
+        <div style="display:flex;align-items:center;gap:10px;justify-content:center">
+          <button type="button" class="g-btn" id="prevSessionBtn" onclick="navigateSession(-1)" style="padding:6px 14px;border-radius:10px;background:rgba(0,0,0,0.05);color:#5A5068;font-weight:700;font-size:14px;border:none;cursor:pointer">&#9664; Prev</button>
+          <div style="text-align:center">
+            <span style="font-size:14px;font-weight:700;color:#B8860B" id="sessionNavLabel">1 / 1</span>
+          </div>
+          <button type="button" class="g-btn" id="nextSessionBtn" onclick="navigateSession(1)" style="padding:6px 14px;border-radius:10px;background:rgba(0,0,0,0.05);color:#5A5068;font-weight:700;font-size:14px;border:none;cursor:pointer">Next &#9654;</button>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;justify-content:center;margin-top:8px">
+          <span style="font-size:12px;color:#8A7A9A">Jump to:</span>
+          <input type="number" id="sessionNavJump" class="g-input" min="1" style="width:70px;padding:4px 8px;font-size:13px;border-radius:8px" onkeydown="if(event.key==='Enter')jumpToSession()">
+          <button type="button" class="g-btn tag" onclick="jumpToSession()" style="background:rgba(0,0,0,0.04);color:#8A8090;font-size:12px;cursor:pointer">Go</button>
+          <span style="font-size:11px;color:#B0A8B8" id="sessionNavInfo"></span>
+        </div>
+      </div>
       <div id="sessionInfoPanel" style="display:none;margin-top:14px;padding:14px 16px;border-radius:12px;background:rgba(122,90,170,0.06);border:1px solid rgba(122,90,170,0.12)">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
           <span style="font-size:18px">&#128100;</span>
@@ -1238,6 +1253,8 @@ let state = {
   session: null,
   sessionId: null,
   conversation: [],
+  loadedSessions: [],
+  currentSessionIdx: 0,
   models: [],
   templates: [],
   // Step 1 range selection
@@ -1879,30 +1896,130 @@ async function loadSessionById() {
   }
 }
 
-async function loadSessionFromJson() {
+function loadSessionFromJson() {
   const jsonStr = document.getElementById('jsonInput').value.trim();
   if (!jsonStr) return;
   clearStatus('loaderStatus');
 
-  try {
-    const parsed = JSON.parse(jsonStr);
-    // Try posting to server to create session
-    showStatus('loaderStatus', '<span class="spinner"></span> Creating session...', 'info');
-    try {
-      const data = await apiFetch('/api/session', {
-        method: 'POST',
-        body: JSON.stringify(parsed)
-      });
-      handleSessionLoaded(data);
-      showStatus('loaderStatus', 'Session created and loaded', 'success');
-    } catch {
-      // If server fails, use locally
-      handleSessionLoaded(parsed);
-      showStatus('loaderStatus', 'Loaded locally (server upload failed)', 'warning');
-    }
-  } catch (e) {
-    showStatus('loaderStatus', `Invalid JSON: ${escapeHtml(e.message)}`, 'error');
+  // Large text — redirect to direct parser
+  if (jsonStr.length > 500000) {
+    document.getElementById('jsonInput').value = '(large file loaded directly)';
+    setTimeout(() => loadSessionsFromText(jsonStr), 50);
+    return;
   }
+
+  let parsed;
+  let allSessions = [];
+
+  try {
+    parsed = JSON.parse(jsonStr);
+    allSessions = [parsed];
+  } catch (e) {
+    // JSONL: 여러 줄의 JSON 객체
+    const lines = jsonStr.split('\n').map(l => l.trim()).filter(Boolean);
+    if (lines.length >= 1) {
+      for (let i = 0; i < lines.length; i++) {
+        try {
+          allSessions.push(JSON.parse(lines[i]));
+        } catch (e2) {
+          console.warn(`[JSONL] Skipping invalid line ${i + 1}: ${e2.message}`);
+        }
+      }
+      if (allSessions.length === 0) {
+        showStatus('loaderStatus', `Invalid JSON/JSONL: no valid lines found`, 'error');
+        return;
+      }
+      parsed = allSessions[0];
+    } else {
+      showStatus('loaderStatus', `Invalid JSON: ${escapeHtml(e.message)}`, 'error');
+      return;
+    }
+  }
+
+  // Store all sessions for navigation
+  state.loadedSessions = allSessions;
+  state.currentSessionIdx = 0;
+
+  if (allSessions.length > 1) {
+    showStatus('loaderStatus', `JSONL detected: ${allSessions.length} sessions loaded`, 'success');
+    updateSessionNav();
+    document.getElementById('multiSessionNav').style.display = 'block';
+  } else {
+    document.getElementById('multiSessionNav').style.display = 'none';
+  }
+
+  handleSessionLoaded(parsed);
+  if (allSessions.length <= 1) showStatus('loaderStatus', 'Session loaded', 'success');
+}
+
+function loadSessionsFromText(text) {
+  clearStatus('loaderStatus');
+  const allSessions = [];
+  const lines = text.split('\n');
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try { allSessions.push(JSON.parse(trimmed)); } catch {}
+  }
+
+  if (allSessions.length === 0) {
+    showStatus('loaderStatus', 'No valid sessions found in file', 'error');
+    return;
+  }
+
+  state.loadedSessions = allSessions;
+  state.currentSessionIdx = 0;
+
+  if (allSessions.length > 1) {
+    showStatus('loaderStatus', `${allSessions.length} sessions loaded`, 'success');
+    document.getElementById('multiSessionNav').style.display = 'block';
+    updateSessionNav();
+  } else {
+    document.getElementById('multiSessionNav').style.display = 'none';
+    showStatus('loaderStatus', 'Session loaded', 'success');
+  }
+
+  handleSessionLoaded(allSessions[0]);
+}
+
+function updateSessionNav() {
+  const total = state.loadedSessions.length;
+  const idx = state.currentSessionIdx;
+  document.getElementById('sessionNavLabel').textContent = `${idx + 1} / ${total}`;
+  document.getElementById('prevSessionBtn').disabled = idx <= 0;
+  document.getElementById('nextSessionBtn').disabled = idx >= total - 1;
+  document.getElementById('sessionNavJump').max = total;
+  document.getElementById('sessionNavJump').placeholder = `1-${total}`;
+
+  const session = state.loadedSessions[idx];
+  let info = '';
+  const sid = session.session_id || session.id || '';
+  const convLen = (session.conversation || []).length;
+  if (sid) info += `ID: ${sid.substring(0, 20)}${sid.length > 20 ? '...' : ''}`;
+  if (convLen) info += (info ? ' | ' : '') + `${convLen} turns`;
+  document.getElementById('sessionNavInfo').textContent = info;
+}
+
+function navigateSession(delta) {
+  const newIdx = state.currentSessionIdx + delta;
+  if (newIdx < 0 || newIdx >= state.loadedSessions.length) return;
+  state.currentSessionIdx = newIdx;
+  handleSessionLoaded(state.loadedSessions[newIdx]);
+  updateSessionNav();
+  showStatus('loaderStatus', `Session ${newIdx + 1} / ${state.loadedSessions.length} loaded`, 'success');
+}
+
+function jumpToSession() {
+  const input = document.getElementById('sessionNavJump');
+  const num = parseInt(input.value);
+  if (!num || num < 1 || num > state.loadedSessions.length) {
+    alert(`1~${state.loadedSessions.length} 사이 숫자를 입력하세요.`);
+    return;
+  }
+  const delta = (num - 1) - state.currentSessionIdx;
+  navigateSession(delta);
+  input.value = '';
 }
 
 function handleFileDrop(event) {
@@ -1918,10 +2035,19 @@ function handleFileSelect(event) {
 }
 
 function readJsonFile(file) {
+  clearStatus('loaderStatus');
+  showStatus('loaderStatus', `<span class="spinner"></span> Reading ${file.name} (${(file.size / 1024 / 1024).toFixed(1)}MB)...`, 'info');
+
   const reader = new FileReader();
   reader.onload = (e) => {
-    document.getElementById('jsonInput').value = e.target.result;
-    loadSessionFromJson();
+    const text = e.target.result;
+
+    if (text.length > 500000) {
+      setTimeout(() => loadSessionsFromText(text), 50);
+    } else {
+      document.getElementById('jsonInput').value = text;
+      loadSessionFromJson();
+    }
   };
   reader.readAsText(file);
 }
@@ -3418,7 +3544,7 @@ function buildStage1Input() {
   }
 
   // system_instruction: Analysis Prompt + 세션 메타정보(숏디, 롱디 등)
-  const systemInstruction = resolveTemplateVars(analysisPrompt, state.session) + getSessionMeta();
+  const systemInstruction = applyLoreToPrompt(analysisPrompt, state.session) + getSessionMeta();
 
   // contents: 싱글턴 형식 — 전체 대화를 하나의 user 메시지로 합침
   const lines = [];
@@ -3550,7 +3676,7 @@ function buildBatchStage1Input(session, maxTurns, previousOOC) {
   const conversationText = '<chat_history>\n' + lines.join('\n\n') + '\n</chat_history>';
   const contents = [{ role: 'user', parts: [{ text: conversationText }] }];
 
-  let basePrompt = resolveTemplateVars(analysisPrompt, session) + getSessionMetaFrom(session);
+  let basePrompt = applyLoreToPrompt(analysisPrompt, session) + getSessionMetaFrom(session);
 
   // previousOOC 체이닝 처리
   if (previousOOC) {
@@ -6164,11 +6290,16 @@ function renderLore(session) {
 }
 
 function applyLoreToPrompt(promptText, session) {
-  if (!session || !promptText.includes('<lore>')) return promptText;
-  const lore = renderLore(session);
-  promptText = promptText.replace(/<lore>[\s\S]*?<\/lore>/g, lore);
+  if (!session) return promptText;
+  // 템플릿 변수 치환 ({{ material.user.name }}, {{user}} 등)
+  promptText = resolveTemplateVars(promptText, session);
+  // <lore> 태그 치환
   if (promptText.includes('<lore>')) {
-    promptText = promptText.replace(/<lore>/g, lore);
+    const lore = renderLore(session);
+    promptText = promptText.replace(/<lore>[\s\S]*?<\/lore>/g, lore);
+    if (promptText.includes('<lore>')) {
+      promptText = promptText.replace(/<lore>/g, lore);
+    }
   }
   return promptText;
 }
