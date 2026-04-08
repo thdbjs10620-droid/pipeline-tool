@@ -3313,6 +3313,41 @@ async function callOpenAIAPI(model, systemInstruction, contents, generationConfi
   return { text, raw: data, usage };
 }
 
+// 프롬프트 내 템플릿 변수를 세션 데이터로 치환
+function resolveTemplateVars(prompt, session) {
+  if (!session || !prompt) return prompt;
+  const cm = typeof session.creator_material === 'string'
+    ? JSON.parse(session.creator_material) : (session.creator_material || {});
+  const um = typeof session.user_material === 'string'
+    ? JSON.parse(session.user_material) : (session.user_material || {});
+
+  const vars = {
+    'material.user.name': um.name || '',
+    'userMaterial.name': um.name || '',
+    'material.user.description': um.description || '',
+    'userMaterial.description': um.description || '',
+    'material.plot.title': cm.title || '',
+    'creatorMaterial.title': cm.title || '',
+    'material.plot.shortDescription': cm.short_description || cm.shortDescription || '',
+    'creatorMaterial.shortDescription': cm.short_description || cm.shortDescription || '',
+    'material.plot.longDescription': cm.long_description || cm.longDescription || '',
+    'creatorMaterial.longDescription': cm.long_description || cm.longDescription || '',
+    'material.plot.genre': cm.genre || (cm.additional?.genre) || '',
+    'creatorMaterial.additional.genre': cm.genre || (cm.additional?.genre) || '',
+    'material.plot.scenario': cm.scenario || (cm.additional?.scenario) || '',
+    'creatorMaterial.additional.scenario': cm.scenario || (cm.additional?.scenario) || '',
+    'material.length.min': cm.additional?.length?.min || cm.length?.min || '400',
+    'material.length.max': cm.additional?.length?.max || cm.length?.max || '800',
+  };
+
+  let result = prompt;
+  for (const [key, value] of Object.entries(vars)) {
+    const pattern = new RegExp(`\\{\\{\\s*${key.replace(/\./g, '\\.')}(\\s*\\|\\s*raw)?\\s*\\}\\}`, 'g');
+    result = result.replace(pattern, value);
+  }
+  return result;
+}
+
 // ========== 세션 메타 추출 (공통) ==========
 function getSessionMeta() {
   if (!state.session) return '';
@@ -3352,7 +3387,7 @@ function buildStage1Input() {
   }
 
   // system_instruction: Analysis Prompt + 세션 메타정보(숏디, 롱디 등)
-  const systemInstruction = analysisPrompt + getSessionMeta();
+  const systemInstruction = resolveTemplateVars(analysisPrompt, state.session) + getSessionMeta();
 
   // contents: 싱글턴 형식 — 전체 대화를 하나의 user 메시지로 합침
   const lines = [];
@@ -3398,7 +3433,7 @@ function handleBatchFile(event) {
         console.warn('Skipping invalid JSON line:', err.message);
       }
     }
-    state.batchSessions = sessions.slice(0, 100);
+    state.batchSessions = sessions;
     document.getElementById('batchSessionCount').textContent = state.batchSessions.length;
     document.getElementById('batchInfo').style.display = 'block';
     document.getElementById('batchResults').style.display = 'none';
@@ -3431,7 +3466,7 @@ function handleBatchJsonlDrop(event) {
         console.warn('Skipping invalid JSON line:', err.message);
       }
     }
-    state.batchSessions = sessions.slice(0, 100);
+    state.batchSessions = sessions;
     document.getElementById('batchSessionCount').textContent = state.batchSessions.length;
     document.getElementById('batchInfo').style.display = 'block';
     document.getElementById('batchResults').style.display = 'none';
@@ -3484,7 +3519,7 @@ function buildBatchStage1Input(session, maxTurns, previousOOC) {
   const conversationText = '<chat_history>\n' + lines.join('\n\n') + '\n</chat_history>';
   const contents = [{ role: 'user', parts: [{ text: conversationText }] }];
 
-  let basePrompt = analysisPrompt + getSessionMetaFrom(session);
+  let basePrompt = resolveTemplateVars(analysisPrompt, session) + getSessionMetaFrom(session);
 
   // previousOOC 체이닝 처리
   if (previousOOC) {
